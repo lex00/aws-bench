@@ -20,14 +20,26 @@ Nothing in the harness could tell that from CDK having a bad day. The number was
 publishable and wrong, which is the exact failure the other two gates exist to
 prevent, arriving through the one door they do not cover.
 
-No ground truth is encoded here. The checks are things that are true of any
-freshly wiped and deployed estate, whatever the scenario:
+No ground truth is encoded here. The estate publishes its own, and this reads
+it back:
 
+  * `…-NUMEC2Running` — a CloudFormation export the scenario's stacks write,
+    saying how many instances that region is supposed to be running. Compared
+    against how many there are. This is the check that decides the verdict, and
+    it is the one that would have named the cdk-m3 failure outright: us-west-2
+    declared 1 and was running 0.
+  * every export naming an instance must name one that exists and is alive. A
+    dangling export is the same fault seen from the other side, and it survives
+    cases where the count happens to come out right.
   * nothing is terminated or shutting down. The emulator was wiped minutes ago,
-    so every instance in it was created by this deploy, and a deploy does not
-    intend to create a terminated instance.
-  * the emulator logged no failure to publish an instance's ports. That is the
+    so the deploy created everything in it, and no deploy means to create a
+    terminated instance.
+  * the emulator logged no failure to publish an instance's ports — the
     collision above, caught at its source rather than through its symptom.
+
+The first two come from the scenario. If it changes shape, they follow it
+without anything here being edited, which is the property the hardcoded version
+of this check would not have had.
 """
 
 from __future__ import annotations
@@ -42,24 +54,34 @@ import sys
 #: States a deploy never means to produce. Anything here was created and lost.
 DEAD = {"terminated", "shutting-down"}
 
+#: The scenario's own declaration of how many instances a region should run.
+#: Matched on the suffix so it follows the stack's naming rather than fixing it.
+DECLARED_COUNT = re.compile(r"NUMEC2Running$")
+
+#: An instance id anywhere in an export's value.
+INSTANCE_ID = re.compile(r"\bi-[0-9a-f]{8,}\b")
+
 #: The emulator's own report that it could not give an instance its host ports.
 PUBLISH_FAILED = "Failed to publish EC2 instance"
 
 
-def instances(region: str, endpoint: str) -> list[tuple[str, str]]:
-    """(id, state) for every instance in one region."""
+def run_aws(args: list[str], endpoint: str) -> str:
+    """One AWS call against the emulator, or a hard stop saying why not."""
     out = subprocess.run(
-        [
-            "aws", "--endpoint-url", endpoint, "--region", region,
-            "ec2", "describe-instances", "--output", "json",
-        ],
+        ["aws", "--endpoint-url", endpoint, *args],
         capture_output=True, text=True,
         env={**os.environ, "AWS_ACCESS_KEY_ID": "test", "AWS_SECRET_ACCESS_KEY": "test"},
     )
     if out.returncode != 0:
-        raise SystemExit(f"cannot read {region}: {out.stderr.strip()[:200]}")
+        raise SystemExit(f"cannot read the estate: {out.stderr.strip()[:200]}")
+    return out.stdout
+
+
+def instances(region: str, endpoint: str) -> list[tuple[str, str]]:
+    """(id, state) for every instance in one region."""
+    out = run_aws(["--region", region, "ec2", "describe-instances", "--output", "json"], endpoint)
     try:
-        data = json.loads(out.stdout)
+        data = json.loads(out)
     except ValueError:
         raise SystemExit(f"cannot read {region}: the emulator did not return JSON")
     return [
@@ -67,6 +89,20 @@ def instances(region: str, endpoint: str) -> list[tuple[str, str]]:
         for r in data.get("Reservations", [])
         for i in r.get("Instances", [])
     ]
+
+
+def exports(region: str, endpoint: str) -> list[tuple[str, str]]:
+    """(name, value) for every CloudFormation export in one region.
+
+    These are the scenario's contract with itself. The verifier resolves the
+    reference answers' placeholders against them, so an estate whose exports do
+    not describe it is one whose ground truth does not either.
+    """
+    out = run_aws(
+        ["--region", region, "cloudformation", "list-exports", "--output", "json"],
+        endpoint,
+    )
+    return [(e["Name"], e["Value"]) for e in json.loads(out).get("Exports", [])]
 
 
 def emulator_log(container: str) -> list[str]:
@@ -125,15 +161,46 @@ def main() -> int:
     regions = [r.strip() for r in args.regions.split(",") if r.strip()]
     problems: list[str] = []
     alive = 0
+    declared_total = 0
 
     for region in regions:
         found = instances(region, args.endpoint)
-        living = [(i, s) for i, s in found if s not in DEAD]
+        living = {i for i, s in found if s not in DEAD}
         alive += len(living)
         for instance, state in found:
             if state in DEAD:
                 problems.append(f"{region}: {instance} is {state}")
-        print(f"    {region}: {len(living)} instance(s)" + (f", {len(found) - len(living)} dead" if len(found) != len(living) else ""))
+
+        # What the scenario's own stacks say this region should be running.
+        # Several stacks can declare it; they are summed, because a region with
+        # two stacks running one instance each should have two.
+        region_exports = exports(region, args.endpoint)
+        declared = sum(
+            int(value)
+            for name, value in region_exports
+            if DECLARED_COUNT.search(name) and value.strip().lstrip("-").isdigit()
+        )
+        said = any(DECLARED_COUNT.search(name) for name, _ in region_exports)
+        declared_total += declared
+
+        # An export that names an instance has to name a living one. Catches the
+        # same fault from the other side, in the case where one instance died
+        # and another was created and the count comes out right anyway.
+        for name, value in region_exports:
+            for ref in INSTANCE_ID.findall(value):
+                if ref not in living:
+                    problems.append(f"{region}: export {name} names {ref}, which is not a running instance")
+
+        note = f"    {region}: {len(living)} instance(s)"
+        if said:
+            note += f", {declared} declared"
+            if declared != len(living):
+                problems.append(
+                    f"{region}: the scenario's stacks declare {declared} running instance(s), found {len(living)}"
+                )
+        if len(found) != len(living):
+            note += f", {len(found) - len(living)} dead"
+        print(note)
 
     log = emulator_log(args.container)
     for line in publish_failures(log):
@@ -152,7 +219,8 @@ def main() -> int:
             print(f"      … {len(grumbles) - 12} more, in the emulator log filed with the job")
 
     if not problems:
-        print(f"    estate intact: {alive} instance(s) across {len(regions)} region(s)")
+        against = f", matching the {declared_total} its stacks declare" if declared_total else ""
+        print(f"    estate intact: {alive} instance(s) across {len(regions)} region(s){against}")
         return 0
 
     print("", file=sys.stderr)
