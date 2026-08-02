@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -68,20 +69,42 @@ def instances(region: str, endpoint: str) -> list[tuple[str, str]]:
     ]
 
 
-def publish_failures(container: str) -> list[str]:
-    """Lines where the emulator could not publish an instance's ports."""
-    out = subprocess.run(
-        ["docker", "logs", container], capture_output=True, text=True,
-    )
+def emulator_log(container: str) -> list[str]:
+    """Every line the emulator has written. Empty if it cannot be read."""
+    out = subprocess.run(["docker", "logs", container], capture_output=True, text=True)
     if out.returncode != 0:
-        # Not fatal on its own. The estate check that matters is the state of
-        # the instances, and that came from the API.
+        # Not fatal on its own. The check that decides the verdict is the state
+        # of the instances, and that came from the API.
         return []
-    return [
-        " ".join(line.split())[:180]
-        for line in (out.stdout + out.stderr).splitlines()
-        if PUBLISH_FAILED in line
-    ]
+    return (out.stdout + out.stderr).splitlines()
+
+
+def publish_failures(lines: list[str]) -> list[str]:
+    """Lines where the emulator could not publish an instance's ports."""
+    return [" ".join(l.split())[:180] for l in lines if PUBLISH_FAILED in l]
+
+
+def complaints(lines: list[str]) -> list[str]:
+    """Everything the emulator logged at WARN or ERROR, deduplicated by shape.
+
+    Printed even when the run is allowed to proceed, because the failure that
+    invalidated a run had already been written here — at WARN, while an instance
+    was going to `terminated` — and the reset that followed took the log with
+    it. A gate only catches what it was told to look for. This is where anything
+    it was not told about will have been said.
+
+    Deduplicated on the message minus its timestamp and ids: one bad deploy
+    produces the same complaint once per instance per region, and eighteen
+    copies of one sentence is how a reader learns to skip the section.
+    """
+    seen: dict[str, int] = {}
+    for line in lines:
+        if " WARN " not in line and " ERROR " not in line:
+            continue
+        shape = re.sub(r"\b(i-[0-9a-f]+|[0-9a-f]{12,})\b", "…", " ".join(line.split()))
+        shape = re.sub(r"^\S+ \S+ ", "", shape)[:200]
+        seen[shape] = seen.get(shape, 0) + 1
+    return [f"{msg}" + (f"   (x{n})" if n > 1 else "") for msg, n in seen.items()]
 
 
 def main() -> int:
@@ -112,11 +135,21 @@ def main() -> int:
                 problems.append(f"{region}: {instance} is {state}")
         print(f"    {region}: {len(living)} instance(s)" + (f", {len(found) - len(living)} dead" if len(found) != len(living) else ""))
 
-    for line in publish_failures(args.container):
+    log = emulator_log(args.container)
+    for line in publish_failures(log):
         problems.append(f"emulator could not publish an instance's ports: {line}")
 
     if not alive:
         problems.append("no instances at all — the deploy did not land")
+
+    # Said whether or not the estate passed. A clean deploy prints nothing here.
+    grumbles = complaints(log)
+    if grumbles:
+        print(f"    the emulator complained {len(grumbles)} time(s) during the deploy:")
+        for line in grumbles[:12]:
+            print(f"      {line}")
+        if len(grumbles) > 12:
+            print(f"      … {len(grumbles) - 12} more, in the emulator log filed with the job")
 
     if not problems:
         print(f"    estate intact: {alive} instance(s) across {len(regions)} region(s)")

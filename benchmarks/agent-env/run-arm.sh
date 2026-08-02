@@ -45,6 +45,16 @@ exec > >(tee -a "$RUN_LOG") 2>&1
 park_run_log() {
   if [ -d "jobs/${JOB}" ]; then
     cp "$RUN_LOG" "jobs/${JOB}/run-arm.log" 2>/dev/null || true
+    # The emulator's own log, filed with the run. It is the only account of what
+    # happened to the estate, and it lived nowhere: the emulator that produced a
+    # result gets torn down by the next run's reset, taking its log with it.
+    #
+    # It had already reported the failure that invalidated a run — "Bind for
+    # 0.0.0.0:30000 failed: port is already allocated", at WARN, while an
+    # instance was going to `terminated` — and nobody was reading it. A gate
+    # catches that now, but a gate only catches what it was told to look for,
+    # and this is where anything else will have been written down.
+    docker logs floci-floci-1 > "jobs/${JOB}/emulator.log" 2>&1 || true
   fi
   rm -f "$RUN_LOG" 2>/dev/null || true
 }
