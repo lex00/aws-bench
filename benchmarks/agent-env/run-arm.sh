@@ -222,6 +222,13 @@ echo "==> [$ARM] deploying the estate"
   esac
 )
 
+# Before anything asks the arm a question, check the estate it will be asked
+# about. Preflight and the audit are both about the tool, and neither can see a
+# deploy that came up short — the tool runs fine and faithfully reports five
+# instances where the scenario defines six.
+echo "==> [$ARM] estate: did the deploy land intact?"
+python3 benchmarks/agent-env/estate-check.py
+
 echo "==> [$ARM] re-exporting the workspace so trials get the deployed state"
 # The estate deploy writes state into the arm directory — terraform.tfstate, the
 # Pulumi stack, .alchemy/. Trials mount the export, not that directory, so an
