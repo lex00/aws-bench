@@ -3,10 +3,16 @@
 # The environment block is not incidental: each toggle exists because the
 # emulator's default diverges from live AWS in a way an agent can read, and an
 # arm that reasons from the live estate is judged on what it reads.
+#
+# The host ports are settable because 4566 is the port every Floci wants, and a
+# developer running one for something else already has it. Set FLOCI_PORT and
+# the whole harness follows — run-arm.sh derives every endpoint it hands to the
+# deploy, the preflight and the trial containers from it. The container side
+# stays 4566: nothing inside is being moved.
 services:
   floci:
     image: ghcr.io/lex00/floci:awsbench
-    ports: ["4566:4566", "443:443"]
+    ports: ["${FLOCI_PORT:-4566}:4566", "${FLOCI_TLS_PORT:-443}:443"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data

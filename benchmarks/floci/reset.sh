@@ -25,8 +25,31 @@ cd "$(dirname "$0")"
 ARM="${1:-}"
 ARMS_DIR="$(cd ../arms && pwd)"
 
-echo "==> removing floci-ec2-* containers (compose down does not)"
-docker ps -aq --filter "name=^floci-ec2" | xargs -r docker rm -f >/dev/null 2>&1 || true
+# Scoped to this emulator's network, because `floci-ec2-*` is not a name only
+# this emulator uses. Any Floci on the machine creates siblings under it, and an
+# unscoped `docker rm -f` reaches into whatever else the developer is running —
+# it deleted a live instance belonging to another Floci that had nothing to do
+# with the benchmark. A reset is allowed to destroy the estate it is resetting
+# and nothing else.
+NET="${FLOCI_NETWORK:-floci_default}"
+echo "==> removing this emulator's floci-ec2-* containers (compose down does not)"
+docker ps -aq --filter "name=^floci-ec2" --filter "network=$NET" \
+  | xargs -r docker rm -f >/dev/null 2>&1 || true
+
+# Siblings of some other Floci. Named rather than removed, because the host port
+# ranges are shared — Floci hands instances 2200-2299 and 30000+, so a foreign
+# instance holding one is a deploy that fails with "port is already allocated"
+# and an instance that goes straight to `terminated`. Knowing that before the
+# deploy is the difference between a diagnosis and a mystery.
+foreign=$(docker ps -aq --filter "name=^floci-ec2" | while read -r c; do
+  docker inspect "$c" --format '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}} {{end}}' 2>/dev/null \
+    | grep -qw "$NET" || docker inspect "$c" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
+done)
+if [ -n "$foreign" ]; then
+  echo "    note: another Floci has instances up, and they share host ports 2200+/30000+:"
+  printf '      %s\n' $foreign
+  echo "    they are left alone; if this deploy hits 'port is already allocated', that is why"
+fi
 
 # Every trial creates its own docker network and they are not always reaped.
 # Docker's default address pool is finite: after a few hundred trials it is
