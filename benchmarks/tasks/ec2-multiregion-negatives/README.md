@@ -37,8 +37,21 @@ Both share the property that makes the security-group question hard. The
 account's default VPCs and their subnets were created by no deployment, so an
 arm reading only its own state sees a subset and cannot know what it is missing.
 
-Neither is a gimme for chant. It scores about half on the existing question of
-this shape, and there is no reason to expect better here.
+**Neither is hard for an agent that reads the account.** The first run of these
+put the no-tool baseline at 6 of 6. That is worth stating plainly, because it
+makes these weaker than the security-group question they are modelled on, where
+even account-reading agents manage only 28% — there you must cross-reference
+every network interface, and here a sweep of two API calls is enough.
+
+So these do not test the same difficulty. What they test is the same
+*structure*: all eight empty subnets are in the account's default VPCs, which no
+deployment created, so an arm reading only the state it wrote cannot find any of
+them. Whether the state-file arms still answer 0 the way they do on security
+groups is the open question, and it is the only reason to run these.
+
+Nor are they a gimme for chant, which reads a recorded snapshot rather than the
+live account and has to have swept the right things when the snapshot was
+taken.
 
 ## The conditions these were written under
 
@@ -57,6 +70,15 @@ cherry-picked without the ones that did not.
 **Published either way.** A question set added by the author of one of the tools
 is worth nothing unless the arm that author builds can lose on it. chant's score
 on these goes on the site whatever it is.
+
+**One defect found by running them before publishing them.** The first version
+of the subnet reference answer claimed the empty subnets included "unused
+subnets in the deployed VPCs". They do not — all eight are in default VPCs. A
+trial answered "8 — us-east-1: 2, us-west-1: 3, us-west-2: 3", which is exactly
+right, and the judge failed it for contradicting the reference on infrastructure
+state. Both references now assert only what `pre_invoke` computes. A question
+that fails correct answers is worse than no question, and this one shipped that
+way for exactly one run.
 
 **Scored separately.** The eight-question board is over eight questions. Folding
 two more in would silently change every arm's denominator and make the new
