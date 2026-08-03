@@ -53,6 +53,34 @@ Nor are they a gimme for chant, which reads a recorded snapshot rather than the
 live account and has to have swept the right things when the snapshot was
 taken.
 
+## First results
+
+| arm | score | account reads | how it answered |
+|---|--:|--:|---|
+| No tool (AWS CLI) | **6/6** | 16 | swept the account |
+| Terraform | **0/6** | 1 | read `terraform.tfstate` |
+| chant | **0/6** | 0 | read its recorded snapshot |
+
+k=3, one run each, on an estate holding 13 subnets (8 empty) and 6 VPCs (2 empty).
+All three runs passed the audit; every arm used its own tooling throughout.
+
+**chant fails these, and that is the result.** It reported 5 empty subnets of 15,
+and *no* empty VPCs at all — its snapshot carries 4 VPCs where the account has 6.
+The two it cannot see are the two that are empty. A snapshot anchored on things
+that exist has nothing to record for a VPC containing nothing, so the absence
+leaves no trace to find. Terraform arrives at the same blind spot from the other
+direction: it does not record what it did not create.
+
+Two designs, one failure. The account-reading baseline answers all six because
+it is the only configuration that looks at what is there rather than at what it
+knows about.
+
+So these questions do not favour chant, and the premise they were written under —
+that the shape which beats state-file tools is a shape chant is good at — is
+wrong as stated. What survives is narrower and more interesting: the shape beats
+*every* model of the estate, including a snapshot, and only a live sweep answers
+it.
+
 ## The conditions these were written under
 
 **Written before any arm ran them.** The estate was queried to check the answers
