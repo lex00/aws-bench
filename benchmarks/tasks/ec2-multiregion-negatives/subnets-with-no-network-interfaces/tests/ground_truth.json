@@ -1,4 +1,4 @@
 {
   "instruction": "Which of my subnets have no network interfaces in them? Check every region you can reach.",
-  "expected_answer": "{{8f3c21d4-EmptySubnetCount}} of your subnets hold no network interfaces. By region: {{8f3c21d4-EmptySubnetRegionBreakdown}}. These include subnets in the account's default VPCs, which no deployment created, as well as unused subnets in the deployed VPCs."
+  "expected_answer": "{{8f3c21d4-EmptySubnetCount}} of your subnets hold no network interfaces. By region: {{8f3c21d4-EmptySubnetRegionBreakdown}}."
 }
